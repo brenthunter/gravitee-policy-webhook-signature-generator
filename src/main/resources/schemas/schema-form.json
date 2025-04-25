@@ -1,0 +1,67 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+        "targetSignatureHeader": {
+            "title": "Signature Header",
+            "description": "Specify the HTTP header that will contain the generated HMAC signature",
+            "type": "string",
+            "default": "X-HMAC-Signature"
+        },
+        "schemeType": {
+            "title": "Generation Type",
+            "description": "By default, this policy will generate the HMAC signature only against the HTTP body or Message content.  Change this option if you need to include additional headers (as well as the body/message) in the signature generation.",
+            "type": "object",
+            "oneOf": [
+                {
+                    "title": "HTTP Body or Message Content (only)",
+                    "description": "By default, this policy will generate the HMAC signature using only the HTTP body or Message content",
+                    "properties": {
+                        "enabled": {
+                            "const": false
+                        }
+                    }
+                },
+                {
+                    "title": "HTTP Body or Message Content + Header(s)",
+                    "description": "Generate the HMAC signature using both the HTTP body or Message content, pre-fixed with additional header(s) values",
+                    "properties": {
+                        "enabled": {
+                            "const": true
+                        },
+                        "headersDelimiter": {
+                            "title": "Delimiter",
+                            "description": "Specify a delimiter to separate each header and the body/message",
+                            "type": "string",
+                            "default": "."
+                        },
+                        "headers": {
+                            "type": "array",
+                            "title": "HTTP/Message Headers",
+                            "description": "List of existing HTTP or Message headers to prepend their values to the body/message for generating the HMAC signature",
+                            "items": {
+                                "title": "HTTP/Message Header Name",
+                                "type": "string",
+                                "default": "X-MyHeaderName"
+                            }
+                        }
+                    }
+                }
+            ]
+        },
+        "secret": {
+            "title": "Secret",
+            "description": "The secret key used to generate the HMAC signature",
+            "type": "string"
+        },
+        "algorithm": {
+            "title": "HMAC Algorithm Type",
+            "description": "Specify the HMAC algorithm",
+            "type": "string",
+            "default": "HmacSHA256",
+            "enum": ["HmacSHA1", "HmacSHA256", "HmacSHA384", "HmacSHA512"]
+        }
+    },
+    "required": ["targetSignatureHeader", "schemeType", "secret", "algorithm"]
+}
