@@ -26,7 +26,7 @@
     <version>1.0.0</version>
 
     <name>Gravitee.io APIM - Policy - Webhook Signature Generator</name>
-    <description>Generates a Webhook (HMAC) signature against the outbound HTTP body, and optionally additional custom header(s), to ensure its identity.  Typically used (in a Gravitee V4-Message API) to generate and attach a HMAC signature of an outbound message to a remote Webhook.</description>
+    <description>Generates a Webhook (HMAC) signature against the outbound HTTP body, and optionally additional custom header(s), to ensure its identity.  Typically used (in a Gravitee V4-Message API with Protocol Mediation) to generate and attach a HMAC signature of an outbound message to a remote Webhook.</description>
 
     <parent>
         <groupId>io.gravitee</groupId>

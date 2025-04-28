@@ -28,15 +28,22 @@ import io.gravitee.gateway.api.stream.BufferedReadWriteStream;
 import io.gravitee.gateway.api.stream.ReadWriteStream;
 import io.gravitee.gateway.api.stream.SimpleReadWriteStream;
 import io.gravitee.gateway.reactive.api.ExecutionFailure;
+//import io.gravitee.gateway.reactive.api.context.HttpExecutionContext;
+//import io.gravitee.gateway.reactive.api.context.MessageExecutionContext;
 import io.gravitee.gateway.reactive.api.context.http.HttpBaseExecutionContext;
 import io.gravitee.gateway.reactive.api.context.http.HttpMessageExecutionContext;
 import io.gravitee.gateway.reactive.api.context.http.HttpPlainExecutionContext;
-import io.gravitee.gateway.reactive.api.context.http.HttpPlainResponse;
+//import io.gravitee.gateway.reactive.api.context.kafka.KafkaExecutionContext;
+//import io.gravitee.gateway.reactive.api.context.kafka.KafkaMessageExecutionContext;
 import io.gravitee.gateway.reactive.api.message.Message;
+//import io.gravitee.gateway.reactive.api.message.kafka.KafkaMessage;
 import io.gravitee.gateway.reactive.api.policy.Policy;
 import io.gravitee.gateway.reactive.api.policy.http.HttpPolicy;
+//import io.gravitee.gateway.reactive.api.policy.kafka.KafkaPolicy;
 import io.gravitee.policy.api.PolicyChain;
 import io.gravitee.policy.api.PolicyResult;
+//import io.gravitee.policy.api.annotations.OnResponse;
+import io.gravitee.policy.api.annotations.OnResponseContent;
 import io.gravitee.policy.webook_signature_generator.configuration.SchemeTypeConfiguration;
 import io.gravitee.policy.webook_signature_generator.configuration.WebhookSignatureGeneratorPolicyConfiguration;
 import io.reactivex.rxjava3.core.Completable;
@@ -64,6 +71,7 @@ import lombok.extern.slf4j.Slf4j;
  * @author GraviteeSource Team
  */
 @Slf4j
+//public class WebhookSignatureGeneratorPolicy implements HttpPolicy, KafkaPolicy {
 public class WebhookSignatureGeneratorPolicy implements HttpPolicy {
 
     private static final String WEBHOOK_SIGNATURE_ERROR = "WEBHOOK_SIGNATURE_ERROR";
@@ -84,6 +92,97 @@ public class WebhookSignatureGeneratorPolicy implements HttpPolicy {
     @Override
     public String id() {
         return "webhook-signature-generator";
+    }
+
+    // HTTP RESPONSE
+    // **************
+    @OnResponseContent
+    public ReadWriteStream<Buffer> onResponseContent(Request request, Response response, ExecutionContext context, PolicyChain chain) {
+        log.info("Executing WebhookSignatureGeneratorPolicy...");
+
+        String secret = context.getTemplateEngine().getValue(configuration.getSecret(), String.class);
+        String algorithm = configuration.getAlgorithm();
+
+        return new BufferedReadWriteStream() {
+            Buffer buffer = Buffer.buffer();
+
+            @Override
+            public SimpleReadWriteStream<Buffer> write(Buffer content) {
+                buffer.appendBuffer(content);
+                return this;
+            }
+
+            @Override
+            public void end() {
+                String targetSigHeader = null;
+                List<String> addedHeaders = null;
+
+                // Get HTTP body payload
+                String data = buffer.toString();
+
+                try {
+                    targetSigHeader = context.getTemplateEngine().getValue(configuration.getTargetSignatureHeader(), String.class);
+                    log.debug("Target header for HMAC Signature: {}", targetSigHeader);
+                    if (targetSigHeader == "" || targetSigHeader.isBlank() || targetSigHeader == null) {
+                        chain.failWith(PolicyResult.failure(WEBHOOK_SIGNATURE_NOT_FOUND, 401, "Webhook Signature Not Found"));
+                        return;
+                    }
+                } catch (Exception e) {
+                    chain.failWith(PolicyResult.failure(WEBHOOK_SIGNATURE_NOT_FOUND, 401, "Webhook Signature Not Found"));
+                    return;
+                }
+
+                log.debug("Config> Does the Signature validation require additional headers?: {}", configuration.getSchemeType().isEnabled()); // true|false
+                if (configuration.getSchemeType().isEnabled()) {
+                    addedHeaders = new ArrayList<>(configuration.getSchemeType().getHeaders());
+
+                    if (addedHeaders.size() > 0) {
+                        int i = 0;
+                        while (i < addedHeaders.size()) {
+                            log.debug("Config> Additional header(s): {} = {}", addedHeaders.get(i), request.headers().get(addedHeaders.get(i)));
+                            if (request.headers().get(addedHeaders.get(i)) == null) {
+                                chain.failWith(PolicyResult.failure(WEBHOOK_ADDITIONAL_HEADERS_NOT_VALID, 401, "A required webhook header value is invalid or missing"));
+                                return;
+                            }
+                            i++;
+                        }
+                    } else {
+                        chain.failWith(PolicyResult.failure(WEBHOOK_ADDITIONAL_HEADERS_NOT_VALID, 401, "Webhook additional headers not valid or not found"));
+                        return;
+                    }
+                }
+
+                log.debug("Config> Secret: {}", secret);
+                log.debug("Config> Algorithm: {}", algorithm);
+                log.debug("Config> Request Body: {}", buffer.toString());
+
+                // Optionally, prefix any additional headers to HTTP body
+                if (configuration.getSchemeType().isEnabled()) {
+                    int i = 0;
+                    String tmpData = "";
+                    while (i < addedHeaders.size()) {
+                        log.debug("Prefixing HTTP header '{}' ({}) to HTTP body...", addedHeaders.get(i), request.headers().get(addedHeaders.get(i)));
+                        tmpData += request.headers().get(addedHeaders.get(i));
+                        i++;
+                    }
+                    data = tmpData + data;
+                }
+
+                log.debug("Config> Configuration retrieval completed.");
+
+                log.debug("Final data (for signature creation): {}", data);
+
+                //Generate HMAC Signature
+                String mySignature = generateHmacSignature(data, secret, algorithm);
+
+                log.debug("Setting '' header with signature...");
+
+                var shadowHeaders = HttpHeaders.create(context.request().headers());
+                shadowHeaders.set(configuration.getTargetSignatureHeader(), mySignature);
+
+                chain.doNext(request, response);
+            }
+        };
     }
 
     // MESSAGE RESPONSE

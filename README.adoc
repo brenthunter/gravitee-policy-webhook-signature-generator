@@ -17,7 +17,7 @@ endif::[]
 ^|onMessageResponse
 
 ^.^| -
-^.^| X
+^.^| (Coming soon)
 ^.^| -
 ^.^| X
 
@@ -25,7 +25,7 @@ endif::[]
 
 == Description
 
-Generates a Webhook (HMAC) signature against the outbound HTTP body or Message, and optionally additional custom header(s), to ensure its identity.  Typically used (in a Gravitee V4-Message API) to generate & attach a HMAC signature of an outbound message to a remote Webhook.
+Generates a Webhook (HMAC) signature against the outbound HTTP body or Message, and optionally additional custom header(s), to ensure its identity.  Typically used (in a Gravitee V4-Message API with Protocol Mediation) to generate & attach a HMAC signature of an outbound message to a remote Webhook.
 
 HMAC Signatures are a kind of authentication method which is adding a level of security.  It ensures the request has originated from the known source and has not been tampered with.
 
@@ -83,8 +83,7 @@ The "Signature" is based on the model that the receiver must authenticate itself
 	  "enabled": true,
 	  "headersDelimiter": ".",
 	  "headers": [
-		"X-Gravitee-Request-ID",
-		"X-Header-Timestamp"
+		"My-CustomHeader-Timestamp"
 	  ]
 	},
 	"secret": "mySecret",
@@ -92,6 +91,92 @@ The "Signature" is based on the model that the receiver must authenticate itself
 	"algorithm": "HmacSHA256"
   }
 }
+----
+
+== Example Usage
+
+This example describes how to generate a HMAC signature for each outbound message delivered from an Event Broker (e.g.:Confluent) via a Webhook (PUSH Plan) - using Protocol Mediation.
+
+For added complexity, you may want the HMAC signature to be generated from both the Message Content AND a Message Header.  In our protocol mediation scenario, when publishing messages into the Event Broker you can use the `Transform Headers` policy to convert HTTP Headers into Message Headers.  And then when subscribing to or consuming those messages, the HMAC Signature can be generated from both the Message Content AND a Message Header(s).
+
+Add this policy into the Subscribe phase (of the Event Messages flow).  Remember to order any other transformation policies (like AVRO<>JSON) before this policy.  
+
+Policy configuration; specify the name of the new Signature Header to add to the outbound message, as well as the secret and algorithm type.  You can now add additional Message Header(s) from your Message in your Event Broker.
+
+[,shell]
+.Posting Messages into an Event Broker (only to demonstrate HTTP Headers to Message Headers transformation):
+----
+curl -L 'https://gravitee-apim-gateway/post-to-confluent' -H 'Content-Type: application/json' -H 'X-Custom-Header: some_unique_value' -d '{"my_field1":16,"my_field2":"This is a message from HTTP POST to Confluent Cloud (using a Schema Registry)"}'
+----
+The above API service uses the Transform Headers policy to add a new `my-custom-header-confluent` message header with the value from the requests' `X-Custom-Header` header.
+
+[source, json]
+.Receiving of Webhook (with HMAC Signature Header applied) example:
+----
+Webhook.site:
+	"request":{
+		"method":"POST",
+		"url":"https://webhook.site/5de85005-abcd-1234-2ad18ef8b07f",
+		"headers":[
+			{"name":"x-hmac-signature","value":"P247Tg1qbJiokTKO2hVd17B6Nb6WfaMhgdN/YB9DnO4="},
+			{"name":"my-custom-header-confluent","value":"some_unique_value"},
+			{"name":"x-gravitee-request-id","value":"4f60cb44-9598-4c80-a0cb-4495984c80a0"}
+		],
+		"bodySize":108,
+		"postData":{
+			"text":"{\"my_field1\":16,\"my_field2\":\"This is a message from HTTP POST to Confluent Cloud (using a Schema Registry)\"}"}},
+			...
+----
+
+Now the customer or receiver can validate this request by combining the `my-custom-header-confluent` header value and the HTTP body/content, and comparing HMAC signatures.
+
+Don't forget to include the `headers delimiter` when sharing the `secret` with the receiver (so they use the exact same content to generate & validate the HMAC signature)!
+
+[source, python]
+.Validating the HMAC Signature of the received request (Python) example:
+----
+import hashlib
+import hmac
+import base64
+
+def validate_hmac_signature(signature, message, key):
+    """
+    Validates an HMAC signature against a message and secret key.
+
+    Args:
+        signature: The received HMAC signature (Base64 encoded).
+        message: The message that was signed.
+        key: The shared secret key used for signing.
+
+    Returns:
+        True if the signature is valid, False otherwise.
+    """
+    # Convert the key to bytes (if it's a string)
+    if isinstance(key, str):
+        key = key.encode('utf-8')
+
+    # Convert the message to bytes (if it's a string)
+    if isinstance(message, str):
+        message = message.encode('utf-8')
+
+    # Calculate the HMAC signature
+    calculated_signature = hmac.new(key, message, hashlib.sha256).digest()
+    
+    # Base64 encode the calculated signature
+    calculated_signature_base64 = base64.b64encode(calculated_signature).decode('utf-8')
+
+    # Compare the received signature with the calculated signature
+    return hmac.compare_digest(signature.encode('utf-8'), calculated_signature_base64.encode('utf-8'))
+
+# Example Usage:
+signature = "P247Tg1qbJiokTKO2hVd17B6Nb6WfaMhgdN/YB9DnO4="  # Replace with the received signature
+message = b'some_unique_value.{"my_field1":16,"my_field2":"This is a message from HTTP POST to Confluent Cloud (using a Schema Registry)"}'  # Replace with the raw message (prepended with any Message Headers and headersDelimiter)
+key = b"testsecret" # Replace with your secret key
+
+if validate_hmac_signature(signature, message, key):
+    print("HMAC signature is valid")
+else:
+    print("HMAC signature is invalid")
 ----
 
 == Http Status Code
