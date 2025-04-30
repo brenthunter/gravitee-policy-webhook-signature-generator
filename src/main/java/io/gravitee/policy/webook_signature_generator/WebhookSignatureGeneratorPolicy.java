@@ -29,6 +29,7 @@ import io.gravitee.gateway.api.stream.ReadWriteStream;
 import io.gravitee.gateway.api.stream.SimpleReadWriteStream;
 import io.gravitee.gateway.reactive.api.ExecutionFailure;
 import io.gravitee.gateway.reactive.api.context.http.HttpBaseExecutionContext;
+import io.gravitee.gateway.reactive.api.context.http.HttpExecutionContext;
 import io.gravitee.gateway.reactive.api.context.http.HttpMessageExecutionContext;
 import io.gravitee.gateway.reactive.api.context.http.HttpPlainExecutionContext;
 import io.gravitee.gateway.reactive.api.context.http.HttpPlainResponse;
@@ -86,6 +87,73 @@ public class WebhookSignatureGeneratorPolicy implements HttpPolicy {
         return "webhook-signature-generator";
     }
 
+    // HTTP RESPONSE
+    // **************
+    @Override
+    public Completable onResponse(HttpPlainExecutionContext ctx) {
+        return ctx
+            .response()
+            .body()
+            .flatMapCompletable(buffer -> validate(ctx, ctx.response().headers(), buffer, WebhookSignatureGeneratorPolicy::interrupt))
+            .onErrorResumeNext(th -> errorHandling(ctx, WEBHOOK_SIGNATURE_ERROR, th.toString(), WebhookSignatureGeneratorPolicy::interrupt));
+    }
+
+    private <T extends HttpBaseExecutionContext> Completable validate(T ctx, HttpHeaders httpHeaders, Buffer buffer, BiFunction<T, ExecutionFailure, Completable> interrupt)
+        throws IOException {
+        log.info("Executing WebhookSignatureGeneratorPolicy (in onResponse context)...");
+
+        String secret = ctx.getTemplateEngine().getValue(configuration.getSecret(), String.class);
+        String algorithm = configuration.getAlgorithm();
+        String messageContent = buffer.toString();
+        List<String> addedHeaders = null;
+        String headersDelimiter = null;
+
+        log.debug("Config> messageContent: {}", messageContent);
+
+        log.debug("Config> Does the Signature validation require additional HTTP headers?: {}", configuration.getSchemeType().isEnabled()); // true|false
+        if (configuration.getSchemeType().isEnabled()) {
+            addedHeaders = new ArrayList<>(configuration.getSchemeType().getHeaders());
+
+            headersDelimiter = configuration.getSchemeType().getHeadersDelimiter();
+            log.debug("Config> headersDelimiter: {}", headersDelimiter);
+
+            if (addedHeaders.size() > 0) {
+                int i = 0;
+                String tmpData = "";
+                while (i < addedHeaders.size()) {
+                    log.debug("Config> Prefixing HTTP header '{}' ({}) to HTTP Content", addedHeaders.get(i), httpHeaders.get(addedHeaders.get(i)));
+                    if (httpHeaders.get(addedHeaders.get(i)) == null) {
+                        log.error("A specified header value is invalid or missing!");
+                        return errorHandling(ctx, WEBHOOK_ADDITIONAL_HEADERS_NOT_VALID, "A specified header value is invalid or missing!", interrupt);
+                    } else {
+                        tmpData += httpHeaders.get(addedHeaders.get(i)) + headersDelimiter;
+                    }
+                    i++;
+                }
+                messageContent = tmpData + messageContent;
+            } else {
+                return errorHandling(ctx, WEBHOOK_ADDITIONAL_HEADERS_NOT_VALID, "Additional headers were specified, but unable to find any configured headers!", interrupt);
+            }
+
+            log.debug("Final messageContent (prepended with additional header values): {}", messageContent);
+        }
+
+        //Generate HMAC Signature
+        String mySignature = generateHmacSignature(messageContent, secret, algorithm);
+
+        return addSignatureToHeader(ctx.getTemplateEngine(), ctx.response().headers(), mySignature)
+            .onErrorResumeWith(errorHandling(ctx, WEBHOOK_SIGNATURE_ERROR, "Unable to process Signature Generator of HTTP Body!", interrupt));
+    }
+
+    private <T extends HttpBaseExecutionContext> Completable errorHandling(T ctx, String key, String th, BiFunction<T, ExecutionFailure, Completable> interrupt) {
+        ctx.metrics().setErrorMessage(th);
+        return interrupt.apply(ctx, new ExecutionFailure(500).key(key).message(th));
+    }
+
+    private static Completable interrupt(HttpPlainExecutionContext ctx, ExecutionFailure executionFailure) {
+        return ctx.interruptWith(executionFailure);
+    }
+
     // MESSAGE RESPONSE
     // ****************
     @Override
@@ -130,7 +198,7 @@ public class WebhookSignatureGeneratorPolicy implements HttpPolicy {
                 return ctx.interruptMessageWith(new ExecutionFailure(500).key(WEBHOOK_ADDITIONAL_HEADERS_NOT_VALID).message("A specified header value is invalid or missing!"));
             }
 
-            log.debug("messageContent (prepended with additional header values): {}", messageContent);
+            log.debug("Final messageContent (prepended with additional header values): {}", messageContent);
         }
 
         //Generate HMAC Signature
