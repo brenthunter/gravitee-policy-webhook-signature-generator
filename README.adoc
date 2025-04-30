@@ -17,7 +17,7 @@ endif::[]
 ^|onMessageResponse
 
 ^.^| -
-^.^| (Coming soon)
+^.^| X
 ^.^| -
 ^.^| X
 
@@ -184,14 +184,14 @@ else:
 |===
 |Code |Message
 
-.^| ```401```
+.^| ```500```
 | In case of:
 
-* Missing or signature
+* Missing target signature header or secret
 
-* Request does not contain headers part of the signature
+* Response does not contain the specified headers to use for signature generation
 
-* Enforce HTTP headers not part of the signature
+* Signature generation failure (such as not being able to read the payload or message)
 |===
 
 == Errors
